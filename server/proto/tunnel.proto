@@ -1,0 +1,27 @@
+syntax = "proto3";
+
+package tunnel;
+
+option go_package = "./proto";
+
+service TunnelService {
+  rpc CreateTunnel(TunnelRequest) returns (stream TrafficResponse);
+  rpc StreamTraffic(stream TrafficRequest) returns (stream TrafficResponse);
+}
+
+message TunnelRequest {
+  string subdomain = 1;
+}
+
+message TunnelResponse {
+  string message = 1;
+  int32 sequence = 2;
+}
+
+message TrafficRequest {
+  bytes payload = 1;
+}
+
+message TrafficResponse {
+  bytes payload = 1;
+}
