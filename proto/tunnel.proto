@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package tunnel;  // Define a package name
+
+option go_package = "github.com/shaxbozaka/pulse/proto";
+
+service TunnelService {
+  rpc CreateTunnel(TunnelRequest) returns (stream TrafficResponse);
+  rpc StreamTraffic(stream TrafficRequest) returns (stream TrafficResponse);
+}
+
+message TunnelRequest {
+  string subdomain = 1;
+}
+
+message TrafficRequest {
+  bytes payload = 1;
+}
+
+message TrafficResponse {
+  bytes payload = 1;
+}
