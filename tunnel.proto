@@ -1,0 +1,17 @@
+syntax = "proto3";
+
+package tunnel;  // Define a package name
+
+option go_package = "github.com/yourusername/yourproject/proto";  // Change this to your real module path
+
+service TunnelService {
+  rpc OpenTunnel (TunnelRequest) returns (TunnelResponse);
+}
+
+message TunnelRequest {
+  string name = 1;
+}
+
+message TunnelResponse {
+  string status = 1;
+}
