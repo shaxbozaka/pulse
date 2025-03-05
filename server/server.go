@@ -29,6 +29,32 @@ func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
 
+func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
+	for {
+		packet, err := stream.Recv()
+		if err != nil {
+			if err.Error() == "EOF" {
+				log.Println("Client closed the stream")
+				return nil
+			}
+			log.Printf("Error receiving data: %v", err)
+			return err
+		}
+
+		log.Printf("Received data from client: %s", string(packet.Data))
+
+		// Example: Echo the received data back
+		err = stream.Send(&datapb.DataPacket{
+			TunnelId: packet.TunnelId,
+			Data:     []byte(fmt.Sprintf("Server received: %s", packet.Data)),
+		})
+		if err != nil {
+			log.Printf("Error sending response: %v", err)
+			return err
+		}
+	}
+}
+
 // Handle HTTP requests and forward them to the client
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
