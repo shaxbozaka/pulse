@@ -15,7 +15,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 )
 
-// Server struct implementing both gRPC services
+// Server implements both gRPC services
 type Server struct {
 	controlpb.UnimplementedTunnelControlServer
 	datapb.UnimplementedTunnelDataServer
@@ -30,7 +30,7 @@ func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
 
-// ForwardData relays packets between client and server
+// ForwardData handles bidirectional streaming for relaying packets
 func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 	for {
 		packet, err := stream.Recv()
@@ -45,7 +45,7 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 
 		log.Printf("Received data from client: %s", string(packet.Data))
 
-		// Echo the received data back
+		// Echo received data back
 		response := &datapb.DataPacket{
 			TunnelId: packet.TunnelId,
 			Data:     []byte(fmt.Sprintf("Server received: %s", packet.Data)),
@@ -58,7 +58,7 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 	}
 }
 
-// Handle HTTP requests and forward them to the gRPC client
+// handleHTTP forwards HTTP requests to the gRPC client
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
 
@@ -79,7 +79,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	defer stream.CloseSend()
 
-	// Send the HTTP request path to gRPC client
 	tunnelID := fmt.Sprintf("tunnel-client-%d", r.ContentLength)
 	err = stream.Send(&datapb.DataPacket{
 		TunnelId: tunnelID,
@@ -91,7 +90,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Receive the response
 	resp, err := stream.Recv()
 	if err != nil {
 		log.Printf("Failed to receive response from gRPC client: %v", err)
@@ -99,7 +97,6 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Respond to HTTP client
 	w.Write(resp.Data)
 }
 
@@ -122,7 +119,7 @@ func main() {
 		}
 	}()
 
-	// Start HTTP Server
+	// Start HTTP server
 	http.HandleFunc("/", server.handleHTTP)
 	log.Println("HTTP Server started on port 5000")
 	log.Fatal(http.ListenAndServe(":5000", nil))
