@@ -1,75 +1,66 @@
 package main
 
 import (
+	datapb "Pulse/gen/protos/data"
 	"context"
 	"fmt"
+	"google.golang.org/grpc"
 	"io"
 	"log"
 	"net/http"
-	"time"
-
-	datapb "Pulse/gen/protos/data"
-	"google.golang.org/grpc"
 )
 
-// ForwardData connects to the gRPC server and listens for data to forward
+type Client struct {
+	datapb.UnimplementedTunnelDataServer
+}
+
+// ForwardData receives data from the server and forwards it to localhost
+// forwardData handles data forwarding between the server and the local application.
 func forwardData(client datapb.TunnelDataClient) {
 	stream, err := client.ForwardData(context.Background())
 	if err != nil {
 		log.Fatalf("Failed to create stream: %v", err)
 	}
+	defer stream.CloseSend()
 
-	// Use a goroutine to receive messages
-	go func() {
-		for {
-			packet, err := stream.Recv()
-			if err == io.EOF {
-				log.Println("Stream closed by server (EOF)")
-				return
-			}
-			if err != nil {
-				log.Fatalf("Error receiving data: %v", err)
-			}
+	log.Println("Client waiting for requests...")
 
-			log.Printf("Received request for %s, forwarding to localhost", packet.Data)
-
-			// Forward request to local server
-			resp, err := http.Get(fmt.Sprintf("http://localhost:3000/%s", string(packet.Data)))
-			if err != nil {
-				log.Printf("Error forwarding request: %v", err)
-				continue
-			}
-			defer resp.Body.Close()
-
-			// Read response
-			body, err := io.ReadAll(resp.Body)
-			if err != nil {
-				log.Printf("Error reading response body: %v", err)
-				continue
-			}
-
-			// Send response back to server
-			err = stream.Send(&datapb.DataPacket{
-				TunnelId: packet.TunnelId,
-				Data:     body,
-			})
-			if err != nil {
-				log.Printf("Error sending response: %v", err)
-			}
-		}
-	}()
-
-	// Keep sending heartbeat messages to keep the stream alive
 	for {
-		err := stream.Send(&datapb.DataPacket{TunnelId: "tunnel-client-123", Data: []byte("Ping")})
+		// Receive request from the server
+		packet, err := stream.Recv()
 		if err == io.EOF {
-			log.Println("Stream closed by server (EOF)")
 			break
 		}
 		if err != nil {
-			log.Fatalf("Stream error: %v", err)
+			log.Printf("Error receiving data: %v", err)
+			continue
 		}
-		time.Sleep(5 * time.Second) // Avoid spamming
+
+		log.Printf("Received request for %s, forwarding to localhost", packet.Data)
+
+		// Forward request to the local server (localhost:3000)
+		resp, err := http.Get(fmt.Sprintf("http://localhost:3000%s", string(packet.Data)))
+		if err != nil {
+			log.Printf("Error forwarding request: %v", err)
+			continue
+		}
+		defer resp.Body.Close()
+
+		// Read response body
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Error reading response body: %v", err)
+			continue
+		}
+
+		// Send response back to the gRPC server
+		err = stream.Send(&datapb.DataPacket{
+			TunnelId: packet.TunnelId,
+			Data:     body,
+		})
+		if err != nil {
+			log.Printf("Error sending response: %v", err)
+		}
 	}
 }
 
@@ -84,5 +75,5 @@ func main() {
 	client := datapb.NewTunnelDataClient(conn)
 
 	log.Println("Client started, listening for incoming requests...")
-	forwardData(client)
+	forwardData(client) // Now correctly implemented
 }

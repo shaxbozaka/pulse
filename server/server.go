@@ -29,47 +29,30 @@ func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
 
-// ForwardData receives data from the server and forwards it to localhost
-func (c *Client) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
+func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 	for {
 		packet, err := stream.Recv()
-		if err == io.EOF {
-			break
-		}
 		if err != nil {
+			if err.Error() == "EOF" {
+				log.Println("Client closed the stream")
+				return nil
+			}
+			log.Printf("Error receiving data: %v", err)
 			return err
 		}
 
-		log.Printf("Received request for %s, forwarding to localhost", packet.Data)
+		log.Printf("Received data from client: %s", string(packet.Data))
 
-		// Forward to actual application running on localhost:8080
-		resp, err := http.Get(fmt.Sprintf("http://localhost:3000%s", string(packet.Data)))
-		if err != nil {
-			log.Printf("Error forwarding request: %v", err)
-			return stream.Send(&datapb.DataPacket{
-				TunnelId: packet.TunnelId,
-				Data:     []byte("Error forwarding request"),
-			})
-		}
-		defer resp.Body.Close()
-
-		// Read response
-		body, err := io.ReadAll(resp.Body)
-		if err != nil {
-			log.Printf("Error reading response body: %v", err)
-			return stream.Send(&datapb.DataPacket{
-				TunnelId: packet.TunnelId,
-				Data:     []byte("Error reading response body"),
-			})
-		}
-
-		// Send response back to server
-		stream.Send(&datapb.DataPacket{
+		// Example: Echo the received data back
+		err = stream.Send(&datapb.DataPacket{
 			TunnelId: packet.TunnelId,
-			Data:     body,
+			Data:     []byte(fmt.Sprintf("Server received: %s", packet.Data)),
 		})
+		if err != nil {
+			log.Printf("Error sending response: %v", err)
+			return err
+		}
 	}
-	return nil
 }
 
 // Handle HTTP requests and forward them to the client
