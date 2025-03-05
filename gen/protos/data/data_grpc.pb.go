@@ -2,7 +2,7 @@
 // versions:
 // - protoc-gen-go-grpc v1.5.1
 // - protoc             v5.29.3
-// source: protos/data.proto
+// source: data.proto
 
 package data
 
@@ -111,5 +111,5 @@ var TunnelData_ServiceDesc = grpc.ServiceDesc{
 			ClientStreams: true,
 		},
 	},
-	Metadata: "protos/data.proto",
+	Metadata: "data.proto",
 }
