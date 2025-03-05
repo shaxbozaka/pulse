@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package control;
+option go_package = "gen/protos/control";
+
+service TunnelControl {
+  rpc CreateTunnel (TunnelRequest) returns (TunnelResponse);
+}
+
+message TunnelRequest {
+  string client_id = 1;
+  string target_host = 2;
+  int32 target_port = 3;
+}
+
+message TunnelResponse {
+  string tunnel_id = 1;
+  string public_url = 2;
+}
