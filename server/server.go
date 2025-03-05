@@ -56,8 +56,15 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 		log.Printf("Received data from client: %s", string(packet.Data))
 
 		// Send received data to HTTP response channel
-		httpResponse := fmt.Sprintf("TunnelId: %s\nData: %s", packet.TunnelId, string(packet.Data))
-		log.Println("Sending HTTP response: ", httpResponse)
+		response := &datapb.DataPacket{
+			TunnelId: packet.TunnelId,
+			Data:     packet.Data,
+		}
+
+		if err := stream.Send(response); err != nil {
+			log.Printf("Error sending response: %v", err)
+			return err
+		}
 	}
 }
 
@@ -75,43 +82,49 @@ func (s *Server) clientAvailable() bool {
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
 	log.Print(s.clientAvailable())
-	// Forward request to gRPC client
-	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
-	if err != nil {
-		log.Printf("Failed to connect to gRPC server: %v", err)
-		http.Error(w, "gRPC connection failed", http.StatusInternalServerError)
-		return
-	}
-	defer conn.Close()
+	if s.clientAvailable() {
+		// Forward request to gRPC client
+		conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+		if err != nil {
+			log.Printf("Failed to connect to gRPC server: %v", err)
+			http.Error(w, "gRPC connection failed", http.StatusInternalServerError)
+			return
+		}
+		defer conn.Close()
 
-	client := datapb.NewTunnelDataClient(conn)
-	stream, err := client.ForwardData(context.Background())
-	if err != nil {
-		log.Printf("Failed to create gRPC stream: %v", err)
-		http.Error(w, "Failed to create gRPC stream", http.StatusInternalServerError)
-		return
-	}
-	defer stream.CloseSend()
+		client := datapb.NewTunnelDataClient(conn)
+		stream, err := client.ForwardData(context.Background())
+		if err != nil {
+			log.Printf("Failed to create gRPC stream: %v", err)
+			http.Error(w, "Failed to create gRPC stream", http.StatusInternalServerError)
+			return
+		}
+		defer stream.CloseSend()
 
-	tunnelID := fmt.Sprintf("tunnel-client-%d", r.ContentLength)
-	err = stream.Send(&datapb.DataPacket{
-		TunnelId: tunnelID,
-		Data:     []byte(r.URL.Path),
-	})
-	if err != nil {
-		log.Printf("Failed to send data to gRPC client: %v", err)
-		http.Error(w, "Failed to send data", http.StatusInternalServerError)
-		return
-	}
+		tunnelID := fmt.Sprintf("tunnel-client-%d", r.ContentLength)
+		err = stream.Send(&datapb.DataPacket{
+			TunnelId: tunnelID,
+			Data:     []byte(r.URL.Path),
+		})
+		if err != nil {
+			log.Printf("Failed to send data to gRPC client: %v", err)
+			http.Error(w, "Failed to send data", http.StatusInternalServerError)
+			return
+		}
 
-	resp, err := stream.Recv()
-	if err != nil {
-		log.Printf("Failed to receive response from gRPC client: %v", err)
-		http.Error(w, "Failed to receive response", http.StatusInternalServerError)
-		return
+		resp, err := stream.Recv()
+		if err != nil {
+			log.Printf("Failed to receive response from gRPC client: %v", err)
+			http.Error(w, "Failed to receive response", http.StatusInternalServerError)
+			return
+		}
+		log.Printf("Received response from gRPC client: %s", string(resp.Data))
+		w.Write(resp.Data)
+	} else {
+		// Return a direct HTTP response
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("No active client. Showing local response."))
 	}
-
-	w.Write(resp.Data)
 }
 
 func main() {
