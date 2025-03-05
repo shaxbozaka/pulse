@@ -67,6 +67,7 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 func (s *Server) clientAvailable() bool {
 	var available bool
 	s.activeClients.Range(func(key, value interface{}) bool {
+		log.Printf("Found active client: %s", key)
 		available = true
 		return false // Stop iteration as we found an active client
 	})
@@ -76,7 +77,7 @@ func (s *Server) clientAvailable() bool {
 // handleHTTP forwards HTTP requests to the gRPC client if available
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
-
+	log.Print(s.clientAvailable())
 	if s.clientAvailable() {
 		// Forward request to gRPC client
 		conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
