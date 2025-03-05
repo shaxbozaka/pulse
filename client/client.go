@@ -39,7 +39,7 @@ func createTunnel(client controlpb.TunnelControlClient) {
 	req := &controlpb.TunnelRequest{
 		ClientId:   "client-123",
 		TargetHost: "localhost",
-		TargetPort: 8080,
+		TargetPort: 3000,
 	}
 
 	res, err := client.CreateTunnel(ctx, req)
@@ -59,19 +59,19 @@ func forwardData(client datapb.TunnelDataClient) {
 
 	// Send data
 	go func() {
-		for i := 0; i < 5; i++ {
-			packet := &datapb.DataPacket{
-				TunnelId: "tunnel-client-123",
-				Data:     []byte("Hello from client!"),
-			}
-
-			if err := stream.Send(packet); err != nil {
-				log.Fatalf("Failed to send data: %v", err)
-			}
-
-			time.Sleep(time.Second)
+		//for i := 0; i < 5; i++ {
+		packet := &datapb.DataPacket{
+			TunnelId: "tunnel-client-123",
+			Data:     []byte("Hello from client!"),
 		}
-		stream.CloseSend()
+
+		if err := stream.Send(packet); err != nil {
+			log.Fatalf("Failed to send data: %v", err)
+		}
+
+		//time.Sleep(time.Second)
+		//}
+		//stream.CloseSend()
 	}()
 
 	// Receive data
