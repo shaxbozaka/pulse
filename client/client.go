@@ -14,21 +14,17 @@ type Client struct {
 	datapb.UnimplementedTunnelDataServer
 }
 
-// ForwardData receives data from the server and forwards it to localhost
-// forwardData handles data forwarding between the server and the local application.
-func forwardData(client datapb.TunnelDataClient) {
-	stream, err := client.ForwardData(context.Background())
+/func forwardData(client datapb.TunnelDataClient) {
+	stream, err := client.ForwardData(context.Background()) // Persistent connection
 	if err != nil {
 		log.Fatalf("Failed to create stream: %v", err)
 	}
-	defer stream.CloseSend()
-
-	log.Println("Client waiting for requests...")
+	defer stream.CloseSend() // Close only when exiting
 
 	for {
-		// Receive request from the server
 		packet, err := stream.Recv()
 		if err == io.EOF {
+			log.Println("Stream closed by server")
 			break
 		}
 		if err != nil {
@@ -36,9 +32,9 @@ func forwardData(client datapb.TunnelDataClient) {
 			continue
 		}
 
-		log.Printf("Received request for %s, forwarding to localhost", packet.Data)
+		log.Printf("Received request for %s", packet.Data)
 
-		// Forward request to the local server (localhost:3000)
+		// Forward request
 		resp, err := http.Get(fmt.Sprintf("http://localhost:3000%s", string(packet.Data)))
 		if err != nil {
 			log.Printf("Error forwarding request: %v", err)
@@ -46,14 +42,13 @@ func forwardData(client datapb.TunnelDataClient) {
 		}
 		defer resp.Body.Close()
 
-		// Read response body
 		body, err := io.ReadAll(resp.Body)
 		if err != nil {
 			log.Printf("Error reading response body: %v", err)
 			continue
 		}
 
-		// Send response back to the gRPC server
+		// Send response
 		err = stream.Send(&datapb.DataPacket{
 			TunnelId: packet.TunnelId,
 			Data:     body,
@@ -63,6 +58,7 @@ func forwardData(client datapb.TunnelDataClient) {
 		}
 	}
 }
+
 
 func main() {
 	// Connect to gRPC server
