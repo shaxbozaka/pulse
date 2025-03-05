@@ -1,156 +1,165 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 	"log"
-	"net"
 	"net/http"
-	"sync"
+	"net/url"
+	"time"
 
-	controlpb "Pulse/gen/protos/control"
 	datapb "Pulse/gen/protos/data"
-
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/keepalive"
 )
 
-// Server implements both gRPC services
-type Server struct {
-	controlpb.UnimplementedTunnelControlServer
-	datapb.UnimplementedTunnelDataServer
-	activeClients sync.Map // Stores active clients (key: tunnelID, value: true)
-}
+const (
+	tunnelID          = "tunnel-client-123"
+	reconnectBaseTime = 5 * time.Second
+	reconnectMaxTime  = 60 * time.Second
+)
 
-// CreateTunnel handles tunnel creation requests
-func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest) (*controlpb.TunnelResponse, error) {
-	tunnelID := fmt.Sprintf("tunnel-%s", req.ClientId)
-	publicURL := fmt.Sprintf("static.115.48.21.65.clients.your-server.de:%d", 5000)
-
-	s.activeClients.Store(tunnelID, true)
-	log.Printf("Created tunnel: %s -> %s:%d", tunnelID, req.TargetHost, req.TargetPort)
-	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
-}
-
-// ForwardData handles bidirectional streaming for relaying packets
-func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
-	for {
-		packet, err := stream.Recv()
-		if err != nil {
-			if err == io.EOF {
-				log.Println("Client closed the stream")
-				return nil
-			}
-			log.Printf("Error receiving data: %v", err)
-			return err
-		}
-
-		log.Printf("Received packet: type=%s, tunnel=%s, data=%s", packet.Type, packet.TunnelId, string(packet.Data))
-
-		// Only echo KEEPALIVE packets
-		if packet.Type == datapb.PacketType_KEEPALIVE {
-			response := &datapb.DataPacket{
-				TunnelId: packet.TunnelId,
-				Type:     datapb.PacketType_KEEPALIVE,
-				Data:     packet.Data,
-			}
-			if err := stream.Send(response); err != nil {
-				log.Printf("Error sending keepalive response: %v", err)
-				return err
-			}
-		}
-		// REQUEST and RESPONSE packets are handled by handleHTTP, not echoed here
-	}
-}
-
-// clientAvailable checks if at least one active tunnel exists
-func (s *Server) clientAvailable() bool {
-	var available bool
-	s.activeClients.Range(func(key, value interface{}) bool {
-		available = true
-		return false // Stop iteration as we found an active client
-	})
-	return available
-}
-
-// handleHTTP forwards HTTP requests to the gRPC client if available
-func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
-	if !s.clientAvailable() {
-		http.Error(w, "No active clients", http.StatusServiceUnavailable)
-		return
-	}
-
-	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+// proxyRequest handles the full request forwarding
+func proxyRequest(packet *datapb.DataPacket) (*datapb.DataPacket, error) {
+	requestURL, err := url.Parse(fmt.Sprintf("http://localhost:3000%s", packet.Url))
 	if err != nil {
-		log.Printf("Failed to connect to gRPC server: %v", err)
-		http.Error(w, "gRPC connection failed", http.StatusInternalServerError)
-		return
+		return nil, fmt.Errorf("invalid URL: %v", err)
+	}
+
+	req, err := http.NewRequest(packet.Method, requestURL.String(), bytes.NewReader(packet.Data))
+	if err != nil {
+		return nil, fmt.Errorf("error creating request: %v", err)
+	}
+
+	for key, value := range packet.Headers {
+		req.Header.Set(key, value)
+	}
+
+	client := &http.Client{}
+	resp, err := client.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("error forwarding request: %v", err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, fmt.Errorf("error reading response body: %v", err)
+	}
+
+	responsePacket := &datapb.DataPacket{
+		TunnelId: packet.TunnelId,
+		Type:     datapb.PacketType_RESPONSE,
+		Status:   int32(resp.StatusCode),
+		Headers:  map[string]string{},
+		Data:     respBody,
+	}
+
+	for key, values := range resp.Header {
+		responsePacket.Headers[key] = values[0]
+	}
+
+	return responsePacket, nil
+}
+
+// forwardData handles gRPC streaming and request forwarding
+func forwardData(client datapb.TunnelDataClient) {
+	reconnectDelay := reconnectBaseTime
+
+	for {
+		ctx, cancel := context.WithCancel(context.Background())
+		stream, err := client.ForwardData(ctx)
+		if err != nil {
+			log.Printf("Failed to create stream: %v. Retrying in %v...", err, reconnectDelay)
+			time.Sleep(reconnectDelay)
+			reconnectDelay = min(reconnectDelay*2, reconnectMaxTime)
+			continue
+		}
+
+		reconnectDelay = reconnectBaseTime
+
+		go func() {
+			defer cancel()
+			for {
+				packet, err := stream.Recv()
+				if err == io.EOF {
+					log.Println("Stream closed by server (EOF)")
+					return
+				}
+				if err != nil {
+					log.Printf("Error receiving data: %v", err)
+					return
+				}
+
+				switch packet.Type {
+				case datapb.PacketType_REQUEST:
+					log.Printf("Received REQUEST: %s", string(packet.Data))
+					respPacket, err := proxyRequest(packet)
+					if err != nil {
+						log.Printf("Proxy error: %v", err)
+						continue
+					}
+					if err := stream.Send(respPacket); err != nil {
+						log.Printf("Error sending response: %v", err)
+						return
+					}
+				case datapb.PacketType_KEEPALIVE:
+					log.Printf("Received KEEPALIVE: %s", string(packet.Data))
+					// Do nothing, server handles keepalive echo
+				case datapb.PacketType_RESPONSE:
+					log.Printf("Unexpected RESPONSE packet received: %s", string(packet.Data))
+					// Ignore, should not happen
+				}
+			}
+		}()
+
+		for {
+			select {
+			case <-ctx.Done():
+				log.Println("Stream closed. Reconnecting...")
+				break
+			default:
+				err := stream.Send(&datapb.DataPacket{
+					TunnelId: tunnelID,
+					Type:     datapb.PacketType_KEEPALIVE,
+					Data:     []byte("keepalive"),
+				})
+				if err != nil {
+					log.Printf("Stream error: %v. Reconnecting...", err)
+					break
+				}
+				time.Sleep(10 * time.Second)
+			}
+		}
+
+		cancel()
+	}
+}
+
+// Helper function to get the minimum of two durations
+func min(a, b time.Duration) time.Duration {
+	if a < b {
+		return a
+	}
+	return b
+}
+
+func main() {
+	conn, err := grpc.Dial("static.115.48.21.65.clients.your-server.de:50051",
+		grpc.WithInsecure(),
+		grpc.WithKeepaliveParams(keepalive.ClientParameters{
+			Time:                30 * time.Second,
+			Timeout:             10 * time.Second,
+			PermitWithoutStream: true,
+		}),
+	)
+	if err != nil {
+		log.Fatalf("Failed to connect to server: %v", err)
 	}
 	defer conn.Close()
 
 	client := datapb.NewTunnelDataClient(conn)
-	stream, err := client.ForwardData(context.Background())
-	if err != nil {
-		log.Printf("Failed to create gRPC stream: %v", err)
-		http.Error(w, "Failed to create gRPC stream", http.StatusInternalServerError)
-		return
-	}
-	defer stream.CloseSend()
-
-	tunnelID := "tunnel-client-123" // Use a consistent tunnel ID
-	err = stream.Send(&datapb.DataPacket{
-		TunnelId: tunnelID,
-		Type:     datapb.PacketType_REQUEST,
-		Data:     []byte(r.URL.Path),
-		Method:   r.Method,
-		Url:      r.URL.String(),
-	})
-	if err != nil {
-		log.Printf("Failed to send request to gRPC client: %v", err)
-		http.Error(w, "Failed to send data", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := stream.Recv()
-	if err != nil {
-		log.Printf("Failed to receive response from gRPC client: %v", err)
-		http.Error(w, "Failed to receive response", http.StatusInternalServerError)
-		return
-	}
-
-	if resp.Type != datapb.PacketType_RESPONSE {
-		log.Printf("Unexpected packet type: %s", resp.Type)
-		http.Error(w, "Invalid response type", http.StatusInternalServerError)
-		return
-	}
-
-	w.WriteHeader(int(resp.Status))
-	for key, value := range resp.Headers {
-		w.Header().Set(key, value)
-	}
-	w.Write(resp.Data)
-}
-
-func main() {
-	lis, err := net.Listen("tcp", ":50051")
-	if err != nil {
-		log.Fatalf("Failed to listen: %v", err)
-	}
-
-	grpcServer := grpc.NewServer()
-	server := &Server{}
-	controlpb.RegisterTunnelControlServer(grpcServer, server)
-	datapb.RegisterTunnelDataServer(grpcServer, server)
-
-	go func() {
-		log.Println("gRPC Server started on port 50051")
-		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("gRPC server error: %v", err)
-		}
-	}()
-
-	http.HandleFunc("/", server.handleHTTP)
-	log.Println("HTTP Server started on port 5000")
-	log.Fatal(http.ListenAndServe(":5000", nil))
+	forwardData(client)
 }
