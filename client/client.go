@@ -10,7 +10,7 @@ import (
 	"net/url"
 	"time"
 
-	datapb "Pulse/gen/protos/data"
+	datapb "Pulse/gen/protos/data" // Adjust this import path
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/keepalive"
 )
@@ -21,7 +21,7 @@ const (
 	reconnectMaxTime  = 60 * time.Second
 )
 
-// proxyRequest handles the full request forwarding
+// proxyRequest forwards a request to a local HTTP server and builds a response packet
 func proxyRequest(packet *datapb.DataPacket) (*datapb.DataPacket, error) {
 	requestURL, err := url.Parse(fmt.Sprintf("http://localhost:3000%s", packet.Url))
 	if err != nil {
@@ -64,7 +64,7 @@ func proxyRequest(packet *datapb.DataPacket) (*datapb.DataPacket, error) {
 	return responsePacket, nil
 }
 
-// forwardData handles gRPC streaming and request forwarding
+// forwardData manages the gRPC stream and reconnection logic
 func forwardData(client datapb.TunnelDataClient) {
 	reconnectDelay := reconnectBaseTime
 
@@ -78,8 +78,10 @@ func forwardData(client datapb.TunnelDataClient) {
 			continue
 		}
 
+		// Reset delay on successful connection
 		reconnectDelay = reconnectBaseTime
 
+		// Handle incoming packets in a goroutine
 		go func() {
 			defer cancel()
 			for {
@@ -107,14 +109,15 @@ func forwardData(client datapb.TunnelDataClient) {
 					}
 				case datapb.PacketType_KEEPALIVE:
 					log.Printf("Received KEEPALIVE: %s", string(packet.Data))
-					// Do nothing, server handles keepalive echo
+					// Server echoes keepalive, no action needed
 				case datapb.PacketType_RESPONSE:
 					log.Printf("Unexpected RESPONSE packet received: %s", string(packet.Data))
-					// Ignore, should not happen
+					// Ignore unexpected responses
 				}
 			}
 		}()
 
+		// Send keepalive packets periodically
 		for {
 			select {
 			case <-ctx.Done():
@@ -138,7 +141,7 @@ func forwardData(client datapb.TunnelDataClient) {
 	}
 }
 
-// Helper function to get the minimum of two durations
+// min returns the smaller of two durations
 func min(a, b time.Duration) time.Duration {
 	if a < b {
 		return a
@@ -147,8 +150,11 @@ func min(a, b time.Duration) time.Duration {
 }
 
 func main() {
-	conn, err := grpc.Dial("static.115.48.21.65.clients.your-server.de:50051",
-		grpc.WithInsecure(),
+	// Connect to the server (use "localhost:50051" for local testing)
+	serverAddress := "localhost:50051" // Change to your server address if needed
+
+	conn, err := grpc.Dial(serverAddress,
+		grpc.WithInsecure(), // Use WithTransportCredentials for production
 		grpc.WithKeepaliveParams(keepalive.ClientParameters{
 			Time:                30 * time.Second,
 			Timeout:             10 * time.Second,

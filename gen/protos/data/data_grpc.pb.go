@@ -19,7 +19,7 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	TunnelData_ForwardData_FullMethodName = "/proto.TunnelData/ForwardData"
+	TunnelData_ForwardData_FullMethodName = "/data.TunnelData/ForwardData"
 )
 
 // TunnelDataClient is the client API for TunnelData service.
@@ -100,7 +100,7 @@ type TunnelData_ForwardDataServer = grpc.BidiStreamingServer[DataPacket, DataPac
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
 var TunnelData_ServiceDesc = grpc.ServiceDesc{
-	ServiceName: "proto.TunnelData",
+	ServiceName: "data.TunnelData",
 	HandlerType: (*TunnelDataServer)(nil),
 	Methods:     []grpc.MethodDesc{},
 	Streams: []grpc.StreamDesc{
