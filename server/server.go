@@ -30,7 +30,12 @@ func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest)
 
 	// Store active client in sync.Map
 	s.activeClients.Store(tunnelID, true)
+	log.Printf("Stored active client: %s", tunnelID) // Debugging log
 
+	s.activeClients.Range(func(key, value interface{}) bool {
+		log.Printf("Active client found: %v", key) // Print every stored client
+		return true
+	})
 	log.Printf("Created tunnel: %s -> %s:%d", tunnelID, req.TargetHost, req.TargetPort)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
@@ -66,7 +71,6 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 // clientAvailable checks if at least one active tunnel exists
 func (s *Server) clientAvailable() bool {
 	var available bool
-	log.Printf("Active clients: %+v", s.activeClients)
 	s.activeClients.Range(func(key, value interface{}) bool {
 		available = true
 		return false // Stop iteration as we found an active client
