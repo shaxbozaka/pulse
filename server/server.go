@@ -66,8 +66,8 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 // clientAvailable checks if at least one active tunnel exists
 func (s *Server) clientAvailable() bool {
 	var available bool
+	log.Printf("Active clients: %+v", s.activeClients)
 	s.activeClients.Range(func(key, value interface{}) bool {
-		log.Printf("Found active client: %s", key)
 		available = true
 		return false // Stop iteration as we found an active client
 	})
