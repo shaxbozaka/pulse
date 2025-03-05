@@ -54,7 +54,7 @@ func (c *Client) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 
 func main() {
 	// Connect to gRPC server
-	conn, err := grpc.Dial("your-server-ip:50051", grpc.WithInsecure())
+	conn, err := grpc.Dial("65.21.48.115:50051", grpc.WithInsecure())
 	if err != nil {
 		log.Fatalf("Failed to connect to server: %v", err)
 	}
