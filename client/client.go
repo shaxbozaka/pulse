@@ -34,7 +34,7 @@ func forwardData(client datapb.TunnelDataClient) {
 			log.Printf("Received request for %s, forwarding to localhost", packet.Data)
 
 			// Forward request to local server
-			resp, err := http.Get(fmt.Sprintf("http://localhost:3000%s", string(packet.Data)))
+			resp, err := http.Get(fmt.Sprintf("http://localhost:3000/%s", string(packet.Data)))
 			if err != nil {
 				log.Printf("Error forwarding request: %v", err)
 				continue

@@ -29,32 +29,50 @@ func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
 
-func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
+// ForwardData receives data from the server and forwards it to localhost
+func (c *Client) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 	for {
 		packet, err := stream.Recv()
+		if err == io.EOF {
+			break
+		}
 		if err != nil {
-			if err.Error() == "EOF" {
-				log.Println("Client closed the stream")
-				return nil
-			}
-			log.Printf("Error receiving data: %v", err)
 			return err
 		}
 
-		log.Printf("Received data from client: %s", string(packet.Data))
+		log.Printf("Received request for %s, forwarding to localhost", packet.Data)
 
-		// Example: Echo the received data back
-		err = stream.Send(&datapb.DataPacket{
+		// Forward to actual application running on localhost:8080
+		resp, err := http.Get(fmt.Sprintf("http://localhost:3000%s", string(packet.Data)))
+		if err != nil {
+			log.Printf("Error forwarding request: %v", err)
+			return stream.Send(&datapb.DataPacket{
+				TunnelId: packet.TunnelId,
+				Data:     []byte("Error forwarding request"),
+			})
+		}
+		defer resp.Body.Close()
+
+		// Read response
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			log.Printf("Error reading response body: %v", err)
+			return stream.Send(&datapb.DataPacket{
+				TunnelId: packet.TunnelId,
+				Data:     []byte("Error reading response body"),
+			})
+		}
+
+		// Send response back to server
+		stream.Send(&datapb.DataPacket{
 			TunnelId: packet.TunnelId,
-			Data:     []byte(fmt.Sprintf("Server received: %s", packet.Data)),
+			Data:     body,
 		})
-		if err != nil {
-			log.Printf("Error sending response: %v", err)
-			return err
-		}
 	}
+	return nil
 }
 
+// Handle HTTP requests and forward them to the client
 // Handle HTTP requests and forward them to the client
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
@@ -62,6 +80,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Connect to the client via gRPC
 	conn, err := grpc.Dial("localhost:50051", grpc.WithInsecure()) // Connect to client
 	if err != nil {
+		log.Printf("Failed to connect to client: %v", err)
 		http.Error(w, "Failed to connect to client", http.StatusInternalServerError)
 		return
 	}
@@ -70,16 +89,18 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	client := datapb.NewTunnelDataClient(conn)
 	stream, err := client.ForwardData(context.Background())
 	if err != nil {
+		log.Printf("Failed to create gRPC stream: %v", err)
 		http.Error(w, "Failed to create gRPC stream", http.StatusInternalServerError)
 		return
 	}
 
-	// Send request to client
+	// Send actual HTTP request data to client
 	err = stream.Send(&datapb.DataPacket{
 		TunnelId: "tunnel-client-123",
-		Data:     []byte(r.URL.Path), // Sending path as example
+		Data:     []byte(r.URL.Path), // Sending the HTTP request path
 	})
 	if err != nil {
+		log.Printf("Failed to send data to client: %v", err)
 		http.Error(w, "Failed to send data to client", http.StatusInternalServerError)
 		return
 	}
@@ -87,6 +108,7 @@ func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	// Receive response from client
 	resp, err := stream.Recv()
 	if err != nil {
+		log.Printf("Failed to receive data from client: %v", err)
 		http.Error(w, "Failed to receive data from client", http.StatusInternalServerError)
 		return
 	}
