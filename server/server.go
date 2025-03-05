@@ -7,31 +7,30 @@ import (
 	"log"
 	"net"
 	"net/http"
-	"os"
 
 	controlpb "Pulse/gen/protos/control"
 	datapb "Pulse/gen/protos/data"
 
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials/insecure"
 )
 
 // Server struct implementing both gRPC services
 type Server struct {
 	controlpb.UnimplementedTunnelControlServer
 	datapb.UnimplementedTunnelDataServer
-	client datapb.TunnelDataClient // Store gRPC client to forward requests
 }
 
 // CreateTunnel handles tunnel creation requests
 func (s *Server) CreateTunnel(ctx context.Context, req *controlpb.TunnelRequest) (*controlpb.TunnelResponse, error) {
 	tunnelID := fmt.Sprintf("tunnel-%s", req.ClientId)
-	publicURL := fmt.Sprintf("%s:%d", os.Getenv("SERVER_IP"), 5000) // Use env variable
+	publicURL := fmt.Sprintf("static.115.48.21.65.clients.your-server.de:%d", 5000)
 
-	log.Printf("Created tunnel %s -> %s:%d", tunnelID, req.TargetHost, req.TargetPort)
+	log.Printf("Created tunnel: %s -> %s:%d", tunnelID, req.TargetHost, req.TargetPort)
 	return &controlpb.TunnelResponse{TunnelId: tunnelID, PublicUrl: publicURL}, nil
 }
 
-// ForwardData handles incoming gRPC stream
+// ForwardData relays packets between client and server
 func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 	for {
 		packet, err := stream.Recv()
@@ -46,47 +45,66 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 
 		log.Printf("Received data from client: %s", string(packet.Data))
 
-		err = stream.Send(&datapb.DataPacket{
+		// Echo the received data back
+		response := &datapb.DataPacket{
 			TunnelId: packet.TunnelId,
 			Data:     []byte(fmt.Sprintf("Server received: %s", packet.Data)),
-		})
-		if err != nil {
+		}
+
+		if err := stream.Send(response); err != nil {
 			log.Printf("Error sending response: %v", err)
 			return err
 		}
 	}
 }
 
-// Handle HTTP requests and forward them to the client
+// Handle HTTP requests and forward them to the gRPC client
 func (s *Server) handleHTTP(w http.ResponseWriter, r *http.Request) {
 	log.Printf("Received HTTP request: %s", r.URL.Path)
 
-	// Reuse existing gRPC client
-	stream, err := s.client.ForwardData(context.Background())
+	conn, err := grpc.Dial("localhost:50051", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	if err != nil {
+		log.Printf("Failed to connect to gRPC server: %v", err)
+		http.Error(w, "gRPC connection failed", http.StatusInternalServerError)
+		return
+	}
+	defer conn.Close()
+
+	client := datapb.NewTunnelDataClient(conn)
+	stream, err := client.ForwardData(context.Background())
 	if err != nil {
 		log.Printf("Failed to create gRPC stream: %v", err)
 		http.Error(w, "Failed to create gRPC stream", http.StatusInternalServerError)
 		return
 	}
+	defer stream.CloseSend()
 
-	err = stream.Send(&datapb.DataPacket{TunnelId: "tunnel-client-123", Data: []byte(r.URL.Path)})
+	// Send the HTTP request path to gRPC client
+	tunnelID := fmt.Sprintf("tunnel-client-%d", r.ContentLength)
+	err = stream.Send(&datapb.DataPacket{
+		TunnelId: tunnelID,
+		Data:     []byte(r.URL.Path),
+	})
 	if err != nil {
-		log.Printf("Failed to send data to client: %v", err)
-		http.Error(w, "Failed to send data to client", http.StatusInternalServerError)
+		log.Printf("Failed to send data to gRPC client: %v", err)
+		http.Error(w, "Failed to send data", http.StatusInternalServerError)
 		return
 	}
 
+	// Receive the response
 	resp, err := stream.Recv()
 	if err != nil {
-		log.Printf("Failed to receive data from client: %v", err)
-		http.Error(w, "Failed to receive data from client", http.StatusInternalServerError)
+		log.Printf("Failed to receive response from gRPC client: %v", err)
+		http.Error(w, "Failed to receive response", http.StatusInternalServerError)
 		return
 	}
 
+	// Respond to HTTP client
 	w.Write(resp.Data)
 }
 
 func main() {
+	// Start gRPC server
 	lis, err := net.Listen("tcp", ":50051")
 	if err != nil {
 		log.Fatalf("Failed to listen: %v", err)
@@ -94,17 +112,17 @@ func main() {
 
 	grpcServer := grpc.NewServer()
 	server := &Server{}
-
 	controlpb.RegisterTunnelControlServer(grpcServer, server)
 	datapb.RegisterTunnelDataServer(grpcServer, server)
 
 	go func() {
 		log.Println("gRPC Server started on port 50051")
 		if err := grpcServer.Serve(lis); err != nil {
-			log.Fatalf("Failed to serve: %v", err)
+			log.Fatalf("gRPC server error: %v", err)
 		}
 	}()
 
+	// Start HTTP Server
 	http.HandleFunc("/", server.handleHTTP)
 	log.Println("HTTP Server started on port 5000")
 	log.Fatal(http.ListenAndServe(":5000", nil))
