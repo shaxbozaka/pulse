@@ -56,15 +56,8 @@ func (s *Server) ForwardData(stream datapb.TunnelData_ForwardDataServer) error {
 		log.Printf("Received data from client: %s", string(packet.Data))
 
 		// Send received data to HTTP response channel
-		response := &datapb.DataPacket{
-			TunnelId: packet.TunnelId,
-			Data:     packet.Data,
-		}
-
-		if err := stream.Send(response); err != nil {
-			log.Printf("Error sending response: %v", err)
-			return err
-		}
+		httpResponse := fmt.Sprintf("TunnelId: %s\nData: %s", packet.TunnelId, string(packet.Data))
+		log.Println("Sending HTTP response: ", httpResponse)
 	}
 }
 

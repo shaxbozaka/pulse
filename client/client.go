@@ -101,7 +101,7 @@ func forwardData(client datapb.TunnelDataClient) {
 					log.Printf("Error receiving data: %v", err)
 					return
 				}
-
+				log.Printf("Received packet: %v", packet)
 				// Proxy request
 				respPacket, err := proxyRequest(packet)
 				if err != nil {
