@@ -6,7 +6,7 @@ import (
 	"net"
 )
 
-const listenAddr = ":9000" // Public port for incoming connections
+const listenAddr = ":80" // Public port for incoming connections
 
 func main() {
 	listener, err := net.Listen("tcp", listenAddr)
