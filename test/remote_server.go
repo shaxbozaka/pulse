@@ -6,31 +6,37 @@ import (
 	"net"
 )
 
-const (
-	remoteServer = "static.115.48.21.65.clients.your-server.de:9000" // Remote server
-	localService = "localhost:3000"                                  // Local HTTP server
-)
+const listenAddr = ":9000" // Public port for incoming connections
 
 func main() {
-	// Connect to remote server
-	conn, err := net.Dial("tcp", remoteServer)
+	listener, err := net.Listen("tcp", listenAddr)
 	if err != nil {
-		log.Fatalf("Failed to connect to remote server: %v", err)
+		log.Fatalf("Failed to listen on %s: %v", listenAddr, err)
 	}
-	defer conn.Close()
-
-	log.Println("Connected to remote server, waiting for requests...")
+	log.Println("Remote server listening on", listenAddr)
 
 	for {
-		localConn, err := net.Dial("tcp", localService)
+		clientConn, err := listener.Accept()
 		if err != nil {
-			log.Println("Failed to connect to local service:", err)
+			log.Println("Failed to accept client:", err)
 			continue
 		}
 
+		log.Println("New connection from:", clientConn.RemoteAddr())
+
+		// Wait for the local agent to connect
+		localConn, err := listener.Accept()
+		if err != nil {
+			log.Println("Failed to connect to local agent:", err)
+			clientConn.Close()
+			continue
+		}
+
+		log.Println("Forwarding connection...")
+
 		go func() {
-			io.Copy(localConn, conn)
-			io.Copy(conn, localConn)
+			io.Copy(localConn, clientConn) // Forward client → local agent
+			io.Copy(clientConn, localConn) // Forward local agent → client
 		}()
 	}
 }
